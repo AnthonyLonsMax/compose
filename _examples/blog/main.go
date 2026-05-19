@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/AnthonyLonsMax/dbutil"
+	"github.com/AnthonyLonsMax/eagerload"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -68,7 +68,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	authorIDs := dbutil.ExtractIDs(authors, func(a Author) int { return a.ID })
+	authorIDs := eagerload.ExtractIDs(authors, func(a Author) int { return a.ID })
 	q, args, err := sqlx.In("SELECT id, author_id, title FROM posts WHERE author_id IN (?) ORDER BY id", authorIDs)
 	if err != nil {
 		log.Fatal(err)
@@ -78,7 +78,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	postIDs := dbutil.ExtractIDs(posts, func(p Post) int { return p.ID })
+	postIDs := eagerload.ExtractIDs(posts, func(p Post) int { return p.ID })
 	q, args, err = sqlx.In("SELECT id, post_id, author, body FROM comments WHERE post_id IN (?) ORDER BY id", postIDs)
 	if err != nil {
 		log.Fatal(err)
@@ -90,14 +90,14 @@ func main() {
 
 	// ---- Phase 2: Reconstruct bottom-up ----
 
-	dbutil.MergeChildren(
-		posts, dbutil.GroupBy(comments, func(c Comment) int { return c.PostID }),
+	eagerload.MergeChildren(
+		posts, eagerload.GroupBy(comments, func(c Comment) int { return c.PostID }),
 		func(p Post) int { return p.ID },
 		func(p *Post, cs []Comment) { p.Comments = cs },
 	)
 
-	dbutil.MergeChildren(
-		authors, dbutil.GroupBy(posts, func(p Post) int { return p.AuthorID }),
+	eagerload.MergeChildren(
+		authors, eagerload.GroupBy(posts, func(p Post) int { return p.AuthorID }),
 		func(a Author) int { return a.ID },
 		func(a *Author, ps []Post) { a.Posts = ps },
 	)

@@ -71,6 +71,21 @@ MergeChildren(parents, grouped)       → parents now have their children
 
 Each level can have its own filters, pagination, or business logic.
 
+## What This Library Does NOT Do
+
+eagerload is intentionally scoped — it solves exactly one problem (in-memory graph reconstruction from relational queries) and nothing else:
+
+- **No caching** — no query cache, result cache, or write-through cache. Each call queries the database fresh.
+- **No pagination** — this library does not page/slice results. Apply pagination in your SQL queries (`LIMIT`/`OFFSET` or keyset pagination) before passing data to `MergeChildren`.
+- **No query generation** — you write the SQL. This is not an ORM, query builder, or code generator.
+- **No connection pooling** — use your database driver's built-in pool (`sql.DB`, `pgxpool`, etc.).
+- **No transactions** — manage transactions yourself (`db.BeginTx`, etc.). The library is stateless and works on plain Go slices.
+- **No lazy loading** — all levels are fetched eagerly upfront. There is no proxy, loader, or lazy relationship hydration.
+- **No N+1 detection** — it does not monitor or log N+1 queries. It gives you the tools to avoid them.
+- **No schema migration** — not a migration tool.
+
+What it *does*: query parents → collect IDs → query children with `WHERE IN` → merge in memory. That's it. Composable, minimal, zero dependencies.
+
 ## Functions
 
 ```go
@@ -87,6 +102,9 @@ func MergeChildren[TParent, TChild any, K comparable](
     parentKeyFunc func(TParent) K,
     setChildrenFunc func(*TParent, []TChild),
 )
+
+// Maps a slice of type I to type O using a transform function.
+func Map[I any, O any](elements []I, mapFunc func(I) O) []O
 ```
 
 ## Examples
@@ -187,29 +205,29 @@ sqlc generates type-safe query functions. After calling them, use the same utili
 cats, _ := queries.ListCategories(ctx, db)
 
 // 2. Children batch (sqlc-generated)
-ids := dbutil.ExtractIDs(cats, func(c Category) int32 { return c.ID })
+ids := eagerload.ExtractIDs(cats, func(c Category) int32 { return c.ID })
 prods, _ := queries.ListProductsByCategoryIDs(ctx, db, ids)
 
 // 3. Group & merge
-byCat := dbutil.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
-dbutil.MergeChildren(cats, byCat,
+byCat := eagerload.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
+eagerload.MergeChildren(cats, byCat,
     func(c Category) int32 { return c.ID },
     func(c *Category, ps []Product) { c.Products = ps },
 )
 
 // 4. Query grandchildren (top-down)
-prodIDs := dbutil.ExtractIDs(prods, func(p Product) int32 { return p.ID })
+prodIDs := eagerload.ExtractIDs(prods, func(p Product) int32 { return p.ID })
 vars, _ := queries.ListVariantsByProductIDs(ctx, db, prodIDs)
 
 // 5. Reconstruct bottom-up (flat slices, no nested loops)
-byProd := dbutil.GroupBy(vars, func(v Variant) int32 { return v.ProductID })
-dbutil.MergeChildren(prods, byProd,
+byProd := eagerload.GroupBy(vars, func(v Variant) int32 { return v.ProductID })
+eagerload.MergeChildren(prods, byProd,
     func(p Product) int32 { return p.ID },
     func(p *Product, vs []Variant) { p.Variants = vs },
 )
 
-byCat = dbutil.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
-dbutil.MergeChildren(cats, byCat,
+byCat = eagerload.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
+eagerload.MergeChildren(cats, byCat,
     func(c Category) int32 { return c.ID },
     func(c *Category, ps []Product) { c.Products = ps },
 )

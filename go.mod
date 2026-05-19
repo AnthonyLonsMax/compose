@@ -1,4 +1,4 @@
-module github.com/AnthonyLonsMax/dbutil
+module github.com/AnthonyLonsMax/eagerload
 
 go 1.26.1
 
