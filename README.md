@@ -1,0 +1,175 @@
+# dbutil
+
+Generic utilities for building nested data structures from relational queries without the N+1 problem.
+
+- **Minimal** — 3 generic functions, zero library dependencies.
+- **Composable** — works with sqlx, sqlc, pgx, or any query tool. No framework lock-in.
+- **Solves the real problem** — eliminates N+1 without a full ORM or monolithic JOINs.
+- **Any depth** — the bottom-up pattern avoids nested loops regardless of nesting level.
+
+## The Problem
+
+When building nested responses (e.g. `Category → Products → Variants`), common approaches are:
+
+- **Single JOIN**: returns flat rows that are hard to map back into nested Go structs, and falls apart when each level needs its own filters.
+- **N+1 queries**: one query for parents, then one per parent for children. Simple but doesn't scale.
+
+## How Other Frameworks Solve This
+
+This idea is directly inspired by how major ORMs handle eager loading:
+
+| Framework | Feature |
+|-----------|---------|
+| **Laravel Eloquent** (PHP) | `with()` / `load()` — queries each level with `WHERE IN`, reconstructs in memory |
+| **Hibernate** (Java) | `@BatchSize`, `JOIN FETCH` — configurable batch fetching per relationship |
+
+All of them internally do the same thing: query parents, collect IDs, query children with `WHERE parent_id IN (...)`, and reconstruct the graph in memory. This library exposes those three steps as simple Go generics — no ORM required.
+
+## Is This Library Useful?
+
+Yes, if you:
+
+- Use **sqlx**, **sqlc**, **pgx**, or any query builder — but still need to build nested structs without N+1.
+- Don't want a full ORM but want its eager-loading pattern.
+- Need **per-level filtering/pagination** (impossible with a single JOIN).
+- Want something minimal: 3 functions, zero library dependencies.
+
+It won't replace an ORM for every use case, but for the common pattern of "query parents → batch-query children → merge", it removes the boilerplate.
+
+## The Pattern
+
+Query each level independently with `WHERE IN`, then use these utilities to reconstruct the hierarchy.
+
+```
+SELECT * FROM categories              → []Parent
+ExtractIDS(parents)                   → []id
+SELECT * FROM children WHERE parent_id IN (…) → []Child
+GroupBy(children, parent_id)          → map[id][]Child
+MergeChildren(parents, grouped)       → parents now have their children
+```
+
+Each level can have its own filters, pagination, or business logic.
+
+## Functions
+
+```go
+// Groups a slice into a map keyed by K.
+func GroupBy[T any, K comparable](objects []T, keyFunc func(T) K) map[K][]T
+
+// Extracts a key from each element, preserving order.
+func ExtractIDS[T any, KEY any](objects []T, getKeyFunc func(T) KEY) []KEY
+
+// Merges grouped children into their parents in-place.
+func MergeChildren[TParent, TChild any, K comparable](
+    parents []TParent,
+    childMap map[K][]TChild,
+    parentKeyFunc func(TParent) K,
+    setChildrenFunc func(*TParent, []TChild),
+)
+```
+
+## Examples
+
+### With sqlx
+
+```go
+import "github.com/jmoiron/sqlx"
+
+// 1. Parents
+var cats []Category
+db.Select(&cats, "SELECT id, name FROM categories")
+
+// 2. Children (batch)
+ids := ExtractIDS(cats, func(c Category) int { return c.ID })
+q, args, _ := sqlx.In("SELECT id, category_id, name FROM products WHERE category_id IN (?)", ids)
+var prods []Product
+db.Select(&prods, q, args...)
+
+// 3. Group & merge
+byCat := GroupBy(prods, func(p Product) int { return p.CategoryID })
+MergeChildren(cats, byCat,
+    func(c Category) int { return c.ID },
+    func(c *Category, ps []Product) { c.Products = ps },
+)
+
+// 4. Query grandchildren (top-down)
+prodIDs := ExtractIDS(prods, func(p Product) int { return p.ID })
+q, args, _ = sqlx.In("SELECT id, product_id, name, price FROM variants WHERE product_id IN (?)", prodIDs)
+var vars []Variant
+db.Select(&vars, q, args...)
+
+// 5. Reconstruct bottom-up (flat slices, no nested loops)
+byProd := GroupBy(vars, func(v Variant) int { return v.ProductID })
+MergeChildren(prods, byProd,
+    func(p Product) int { return p.ID },
+    func(p *Product, vs []Variant) { p.Variants = vs },
+)
+
+byCat := GroupBy(prods, func(p Product) int { return p.CategoryID })
+MergeChildren(cats, byCat,
+    func(c Category) int { return c.ID },
+    func(c *Category, ps []Product) { c.Products = ps },
+)
+```
+
+### With sqlc
+
+sqlc generates type-safe query functions. After calling them, use the same utilities:
+
+```go
+// 1. Parents (sqlc-generated)
+cats, _ := queries.ListCategories(ctx, db)
+
+// 2. Children batch (sqlc-generated)
+ids := dbutil.ExtractIDS(cats, func(c Category) int32 { return c.ID })
+prods, _ := queries.ListProductsByCategoryIDs(ctx, db, ids)
+
+// 3. Group & merge
+byCat := dbutil.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
+dbutil.MergeChildren(cats, byCat,
+    func(c Category) int32 { return c.ID },
+    func(c *Category, ps []Product) { c.Products = ps },
+)
+
+// 4. Query grandchildren (top-down)
+prodIDs := dbutil.ExtractIDS(prods, func(p Product) int32 { return p.ID })
+vars, _ := queries.ListVariantsByProductIDs(ctx, db, prodIDs)
+
+// 5. Reconstruct bottom-up (flat slices, no nested loops)
+byProd := dbutil.GroupBy(vars, func(v Variant) int32 { return v.ProductID })
+dbutil.MergeChildren(prods, byProd,
+    func(p Product) int32 { return p.ID },
+    func(p *Product, vs []Variant) { p.Variants = vs },
+)
+
+byCat = dbutil.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
+dbutil.MergeChildren(cats, byCat,
+    func(c Category) int32 { return c.ID },
+    func(c *Category, ps []Product) { c.Products = ps },
+)
+```
+
+## Deeper Nesting
+
+For 3+ levels, use bottom-up reconstruction to avoid nested loops.
+
+**Phase 1**: Query all levels top-down with `WHERE IN`.
+
+**Phase 2**: Reconstruct bottom-up — each `MergeChildren` operates on a flat slice:
+
+```go
+// Query phase (top-down)
+continents := queryContinents(db)
+countries := queryCountriesByIDs(db, ExtractIDS(continents, ...))
+cities    := queryCitiesByIDs(db, ExtractIDS(countries, ...))
+districts := queryDistrictsByIDs(db, ExtractIDS(cities, ...))
+
+// Reconstruct phase (bottom-up, flat slices only)
+MergeChildren(cities,    GroupBy(districts, districtCityID), ...)  // flat
+MergeChildren(countries, GroupBy(cities,    cityCountryID), ...)  // flat
+MergeChildren(continents,GroupBy(countries, countryContID), ...)  // flat
+```
+
+No nested `for` loops regardless of depth. Any depth N requires exactly N queries and N-1 flat `MergeChildren` calls.
+
+See `dbutil_test.go` for full 3-level, 4-level, and 6-level examples.
