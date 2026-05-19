@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/AnthonyLonsMax/eagerload"
+	"github.com/AnthonyLonsMax/compose"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -88,7 +88,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	catIDs := eagerload.ExtractIDs(categories, func(c Category) int { return c.ID })
+	catIDs := compose.ExtractIDs(categories, func(c Category) int { return c.ID })
 	q, args, err := sqlx.In(
 		"SELECT id, category_id, name, price, published FROM products WHERE category_id IN (?) AND published = 1 AND price > 0 ORDER BY id",
 		catIDs,
@@ -101,7 +101,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	prodIDs := eagerload.ExtractIDs(products, func(p Product) int { return p.ID })
+	prodIDs := compose.ExtractIDs(products, func(p Product) int { return p.ID })
 	q, args, err = sqlx.In(
 		"SELECT id, product_id, name, stock FROM variants WHERE product_id IN (?) AND stock > 0 ORDER BY id",
 		prodIDs,
@@ -114,7 +114,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	varIDs := eagerload.ExtractIDs(variants, func(v Variant) int { return v.ID })
+	varIDs := compose.ExtractIDs(variants, func(v Variant) int { return v.ID })
 	q, args, err = sqlx.In(
 		"SELECT id, variant_id, warehouse, quantity FROM inventory WHERE variant_id IN (?) AND quantity > 0 ORDER BY id",
 		varIDs,
@@ -129,20 +129,20 @@ func main() {
 
 	// ---- Phase 2: Reconstruct bottom-up ----
 
-	eagerload.MergeChildren(
-		variants, eagerload.GroupBy(inventory, func(i Inventory) int { return i.VariantID }),
+	compose.MergeChildren(
+		variants, compose.GroupBy(inventory, func(i Inventory) int { return i.VariantID }),
 		func(v Variant) int { return v.ID },
 		func(v *Variant, inv []Inventory) { v.Inventory = inv },
 	)
 
-	eagerload.MergeChildren(
-		products, eagerload.GroupBy(variants, func(v Variant) int { return v.ProductID }),
+	compose.MergeChildren(
+		products, compose.GroupBy(variants, func(v Variant) int { return v.ProductID }),
 		func(p Product) int { return p.ID },
 		func(p *Product, vs []Variant) { p.Variants = vs },
 	)
 
-	eagerload.MergeChildren(
-		categories, eagerload.GroupBy(products, func(p Product) int { return p.CategoryID }),
+	compose.MergeChildren(
+		categories, compose.GroupBy(products, func(p Product) int { return p.CategoryID }),
 		func(c Category) int { return c.ID },
 		func(c *Category, ps []Product) { c.Products = ps },
 	)

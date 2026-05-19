@@ -1,90 +1,57 @@
-# dbutil
+# compose
 
-Generic utilities for building nested data structures from relational queries without the N+1 problem.
+Generic utilities for composing nested Go structs from flat relational query results.
 
-- **Minimal** — 3 generic functions, zero library dependencies.
-- **Composable** — works with sqlx, sqlc, pgx, or any query tool. No framework lock-in.
-- **Solves the real problem** — eliminates N+1 without a full ORM or monolithic JOINs.
-- **Any depth** — the bottom-up pattern avoids nested loops regardless of nesting level.
+`compose` does not load data, cache queries, or generate SQL. It takes slices you already fetched and merges them into a tree — nothing more.
 
-## The Problem
+## Why This Library Exists
 
-When building nested responses (e.g. `Category → Products → Variants`), common approaches are:
+Every project with relational data eventually faces the same problem: you query parents, you need the children, and suddenly you're writing nested for-loops or N+1 queries.
 
-- **Single JOIN**: returns flat rows that are hard to map back into nested Go structs, and falls apart when each level needs its own filters.
-- **N+1 queries**: one query for parents, then one per parent for children. Simple but doesn't scale.
+ORMs solve this with eager loading (`INCLUDE`, `Load()`, `with()`) — they query each level with `WHERE IN`, then reconstruct the graph in memory. But if you don't use an ORM (sqlx, sqlc, pgx, database/sql), you end up writing the same grouping-and-merging code by hand every time.
 
-## How Other Frameworks Solve This
+This library extracts that exact pattern into four generic functions. Nothing more, nothing less.
 
-This idea is directly inspired by how major ORMs handle eager loading:
+## When to Use Compose
 
-| Framework | Feature |
-|-----------|---------|
-| **Laravel Eloquent** (PHP) | `with()` / `load()` — queries each level with `WHERE IN`, reconstructs in memory |
-| **Hibernate** (Java) | `@BatchSize`, `JOIN FETCH` — configurable batch fetching per relationship |
+You write raw SQL or use a lightweight query library, and you need to build nested responses like:
 
-All of them internally do the same thing: query parents, collect IDs, query children with `WHERE parent_id IN (...)`, and reconstruct the graph in memory. This library exposes those three steps as simple Go generics — no ORM required.
+- `Category → Products → Variants` (e-commerce)
+- `Author → Posts → Comments` (blog)
+- `Continent → Country → City → District` (geo hierarchy)
+- `Order → Items → Shipments` (commerce)
 
-## Is This Library Useful?
+Without compose, the options are:
 
-Yes, if you:
+1. **N+1 queries** — one query per parent. Simple but doesn't scale.
+2. **Single massive JOIN** — returns flat rows that are hard to map into nested structs, and per-level filtering is impossible.
+3. **Database JSON aggregation** — works great but locks you into PostgreSQL-specific syntax and loses type safety.
+4. **A full ORM** — solves the problem but brings a large API surface, runtime deps, and vendor lock-in.
 
-- Use **sqlx**, **sqlc**, **pgx**, or any query builder — but still need to build nested structs without N+1.
-- Don't want a full ORM but want its eager-loading pattern.
-- Need **per-level filtering/pagination** (impossible with a single JOIN).
-- Want something minimal: 3 functions, zero library dependencies.
+Compose is for case 4 when you don't want case 4.
 
-### When to Use This Library Over Database-Side JSON
+## What Compose Does NOT Do
 
-Many modern databases can build nested JSON directly (e.g. `JSON_AGG`, `JSON_BUILD_OBJECT` in PostgreSQL). However, this library is a better fit when:
-
-- **Your DB doesn't support JSON functions** — SQLite, MySQL < 5.7, older PostgreSQL versions, or any legacy/commercial DB without JSON aggregation.
-- **You need per-level filtering** — database JSON aggregation forces a single query; you cannot apply different WHERE/pagination/sorting per nesting level. With this library each level is an independent query.
-- **You want type safety** — JSON aggregation returns `[]byte` or a driver-specific type you must deserialize. This library works directly with typed Go structs via generics.
-- **The reconstruction is complex** — deeply nested structures with 4+ levels become unwieldy in SQL but remain flat and readable in Go.
-- **You avoid vendor lock-in** — the same Go code works with PostgreSQL, MySQL, SQLite, SQL Server, etc. without changing a single line.
-
-### What Makes This Library Stand Out
-
-| Concern | This library | JSON in SQL | ORM |
-|---------|-------------|-------------|-----|
-| Per-level filters | ✅ Yes | ❌ Single query | ✅ Yes |
-| DB-agnostic | ✅ Any driver | ❌ PostgreSQL only | ✅ Most ORMs |
-| No runtime deps | ✅ 0 dependencies | ✅ None | ❌ Heavy |
-| Type-safe | ✅ Generics | ❌ `[]byte` | ✅ Usually |
-| Learning curve | ~3 functions | ❌ Complex SQL | ❌ Large API surface |
-| N+1 elimination | ✅ Batch WHERE IN | ✅ Single query | ✅ Eager loading |
-
-It won't replace an ORM for every use case, but for the common pattern of "query parents → batch-query children → merge", it removes the boilerplate.
+- **No data loading** — you fetch the data. Compose only merges it.
+- **No caching** — no query cache, result cache, or write-through.
+- **No pagination** — apply `LIMIT`/`OFFSET` in your SQL before passing data in.
+- **No query generation** — you write the SQL.
+- **No lazy loading** — all levels are fetched eagerly upfront.
+- **No N+1 detection** — it cannot detect or prevent N+1; it gives you the tools to avoid them.
+- **No schema migration** — not a migration tool.
 
 ## The Pattern
 
-Query each level independently with `WHERE IN`, then use these utilities to reconstruct the hierarchy.
-
 ```
-SELECT * FROM categories              → []Parent
-ExtractIDs(parents)                   → []id
-SELECT * FROM children WHERE parent_id IN (…) → []Child
-GroupBy(children, parent_id)          → map[id][]Child
-MergeChildren(parents, grouped)       → parents now have their children
+SELECT * FROM categories                        → []Parent
+ExtractIDs(parents)                             → []id
+SELECT * FROM children WHERE parent_id IN (…)   → []Child
+GroupBy(children, parent_id)                    → map[id][]Child
+MergeChildren(parents, grouped)                 → parents now have children
+Map(parents, toDTO)                             → []ParentDTO (optional)
 ```
 
-Each level can have its own filters, pagination, or business logic.
-
-## What This Library Does NOT Do
-
-eagerload is intentionally scoped — it solves exactly one problem (in-memory graph reconstruction from relational queries) and nothing else:
-
-- **No caching** — no query cache, result cache, or write-through cache. Each call queries the database fresh.
-- **No pagination** — this library does not page/slice results. Apply pagination in your SQL queries (`LIMIT`/`OFFSET` or keyset pagination) before passing data to `MergeChildren`.
-- **No query generation** — you write the SQL. This is not an ORM, query builder, or code generator.
-- **No connection pooling** — use your database driver's built-in pool (`sql.DB`, `pgxpool`, etc.).
-- **No transactions** — manage transactions yourself (`db.BeginTx`, etc.). The library is stateless and works on plain Go slices.
-- **No lazy loading** — all levels are fetched eagerly upfront. There is no proxy, loader, or lazy relationship hydration.
-- **No N+1 detection** — it does not monitor or log N+1 queries. It gives you the tools to avoid them.
-- **No schema migration** — not a migration tool.
-
-What it *does*: query parents → collect IDs → query children with `WHERE IN` → merge in memory. That's it. Composable, minimal, zero dependencies.
+Each level is an independent query with its own filters, pagination, and sorting.
 
 ## Functions
 
@@ -107,220 +74,79 @@ func MergeChildren[TParent, TChild any, K comparable](
 func Map[I any, O any](elements []I, mapFunc func(I) O) []O
 ```
 
-## Examples
+## Use Cases
 
 ### With sqlx
 
 ```go
-import "github.com/jmoiron/sqlx"
+import (
+    "github.com/AnthonyLonsMax/compose"
+    "github.com/jmoiron/sqlx"
+)
 
-// 1. Parents
 var cats []Category
-db.Select(&cats, "SELECT id, name FROM categories")
+db.Select(&cats, "SELECT id, name FROM categories WHERE active = 1")
 
-// 2. Children (batch)
-ids := ExtractIDs(cats, func(c Category) int { return c.ID })
-q, args, _ := sqlx.In("SELECT id, category_id, name FROM products WHERE category_id IN (?)", ids)
+ids := compose.ExtractIDs(cats, func(c Category) int { return c.ID })
+q, args, _ := sqlx.In(
+    "SELECT id, category_id, name, price FROM products WHERE category_id IN (?) AND published = 1",
+    ids,
+)
 var prods []Product
 db.Select(&prods, q, args...)
 
-// 3. Group & merge
-byCat := GroupBy(prods, func(p Product) int { return p.CategoryID })
-MergeChildren(cats, byCat,
+byCat := compose.GroupBy(prods, func(p Product) int { return p.CategoryID })
+compose.MergeChildren(cats, byCat,
     func(c Category) int { return c.ID },
     func(c *Category, ps []Product) { c.Products = ps },
 )
-
-// 4. Query grandchildren (top-down)
-prodIDs := ExtractIDs(prods, func(p Product) int { return p.ID })
-q, args, _ = sqlx.In("SELECT id, product_id, name, price FROM variants WHERE product_id IN (?)", prodIDs)
-var vars []Variant
-db.Select(&vars, q, args...)
-
-// 5. Reconstruct bottom-up (flat slices, no nested loops)
-byProd := GroupBy(vars, func(v Variant) int { return v.ProductID })
-MergeChildren(prods, byProd,
-    func(p Product) int { return p.ID },
-    func(p *Product, vs []Variant) { p.Variants = vs },
-)
-
-byCat := GroupBy(prods, func(p Product) int { return p.CategoryID })
-MergeChildren(cats, byCat,
-    func(c Category) int { return c.ID },
-    func(c *Category, ps []Product) { c.Products = ps },
-)
-```
-
-Output:
-
-```json
-[
-  {
-    "id": 1,
-    "name": "Alice",
-    "posts": [
-      {
-        "id": 1,
-        "author_id": 1,
-        "title": "First Post",
-        "comments": [
-          { "id": 1, "post_id": 1, "author": "Charlie", "body": "Great post!" },
-          { "id": 2, "post_id": 1, "author": "Diana", "body": "Thanks!" }
-        ]
-      },
-      {
-        "id": 2,
-        "author_id": 1,
-        "title": "Second Post",
-        "comments": [
-          { "id": 3, "post_id": 2, "author": "Eve", "body": "Nice write-up" }
-        ]
-      }
-    ]
-  },
-  {
-    "id": 2,
-    "name": "Bob",
-    "posts": [
-      {
-        "id": 3,
-        "author_id": 2,
-        "title": "Hello World",
-        "comments": [
-          { "id": 4, "post_id": 3, "author": "Frank", "body": "First comment!" },
-          { "id": 5, "post_id": 3, "author": "Grace", "body": "Awesome blog" }
-        ]
-      }
-    ]
-  }
-]
 ```
 
 ### With sqlc
 
-sqlc generates type-safe query functions. After calling them, use the same utilities:
-
 ```go
-// 1. Parents (sqlc-generated)
 cats, _ := queries.ListCategories(ctx, db)
 
-// 2. Children batch (sqlc-generated)
-ids := eagerload.ExtractIDs(cats, func(c Category) int32 { return c.ID })
+ids := compose.ExtractIDs(cats, func(c Category) int32 { return c.ID })
 prods, _ := queries.ListProductsByCategoryIDs(ctx, db, ids)
 
-// 3. Group & merge
-byCat := eagerload.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
-eagerload.MergeChildren(cats, byCat,
-    func(c Category) int32 { return c.ID },
-    func(c *Category, ps []Product) { c.Products = ps },
-)
-
-// 4. Query grandchildren (top-down)
-prodIDs := eagerload.ExtractIDs(prods, func(p Product) int32 { return p.ID })
-vars, _ := queries.ListVariantsByProductIDs(ctx, db, prodIDs)
-
-// 5. Reconstruct bottom-up (flat slices, no nested loops)
-byProd := eagerload.GroupBy(vars, func(v Variant) int32 { return v.ProductID })
-eagerload.MergeChildren(prods, byProd,
-    func(p Product) int32 { return p.ID },
-    func(p *Product, vs []Variant) { p.Variants = vs },
-)
-
-byCat = eagerload.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
-eagerload.MergeChildren(cats, byCat,
+byCat := compose.GroupBy(prods, func(p Product) int32 { return p.CategoryID })
+compose.MergeChildren(cats, byCat,
     func(c Category) int32 { return c.ID },
     func(c *Category, ps []Product) { c.Products = ps },
 )
 ```
 
-Output (with per-level filters: only active categories, published products with price > 0, variants with stock > 0, inventory with quantity > 0):
+### Deep Nesting (3+ levels)
 
-```json
-[
-  {
-    "id": 1,
-    "name": "Clothing",
-    "active": true,
-    "products": [
-      {
-        "id": 1,
-        "category_id": 1,
-        "name": "T-Shirt",
-        "price": 19.99,
-        "published": true,
-        "variants": [
-          {
-            "id": 1,
-            "product_id": 1,
-            "name": "Small",
-            "stock": 10,
-            "inventory": [
-              { "id": 1, "variant_id": 1, "warehouse": "Warehouse A", "quantity": 20 },
-              { "id": 2, "variant_id": 1, "warehouse": "Warehouse B", "quantity": 5 }
-            ]
-          },
-          {
-            "id": 3,
-            "product_id": 1,
-            "name": "Large",
-            "stock": 5,
-            "inventory": [
-              { "id": 3, "variant_id": 3, "warehouse": "Warehouse A", "quantity": 10 }
-            ]
-          }
-        ]
-      }
-    ]
-  },
-  {
-    "id": 2,
-    "name": "Electronics",
-    "active": true,
-    "products": [
-      {
-        "id": 3,
-        "category_id": 2,
-        "name": "Headphones",
-        "price": 99.99,
-        "published": true,
-        "variants": [
-          {
-            "id": 4,
-            "product_id": 3,
-            "name": "Wired",
-            "stock": 3,
-            "inventory": [
-              { "id": 5, "variant_id": 4, "warehouse": "Warehouse B", "quantity": 8 }
-            ]
-          }
-        ]
-      }
-    ]
-  }
-]
-```
-
-## Deeper Nesting
-
-For 3+ levels, use bottom-up reconstruction to avoid nested loops.
-
-**Phase 1**: Query all levels top-down with `WHERE IN`.
-
-**Phase 2**: Reconstruct bottom-up — each `MergeChildren` operates on a flat slice:
+Query top-down, reconstruct bottom-up:
 
 ```go
-// Query phase (top-down)
 continents := queryContinents(db)
-countries := queryCountriesByIDs(db, ExtractIDs(continents, ...))
-cities    := queryCitiesByIDs(db, ExtractIDs(countries, ...))
-districts := queryDistrictsByIDs(db, ExtractIDs(cities, ...))
+countries  := queryCountriesByIDs(db, compose.ExtractIDs(continents, ...))
+cities     := queryCitiesByIDs(db, compose.ExtractIDs(countries, ...))
+districts  := queryDistrictsByIDs(db, compose.ExtractIDs(cities, ...))
 
-// Reconstruct phase (bottom-up, flat slices only)
-MergeChildren(cities,    GroupBy(districts, districtCityID), ...)  // flat
-MergeChildren(countries, GroupBy(cities,    cityCountryID), ...)  // flat
-MergeChildren(continents,GroupBy(countries, countryContID), ...)  // flat
+compose.MergeChildren(cities,     compose.GroupBy(districts, ...), ...)
+compose.MergeChildren(countries,  compose.GroupBy(cities, ...), ...)
+compose.MergeChildren(continents, compose.GroupBy(countries, ...), ...)
 ```
 
-No nested `for` loops regardless of depth. Any depth N requires exactly N queries and N-1 flat `MergeChildren` calls.
+No nested loops. Any depth N requires N queries and N-1 flat `MergeChildren` calls.
 
-See `dbutil_test.go` for full 3-level, 4-level, and 6-level examples.
+See `compose_test.go` for full 3-level, 4-level, and 6-level examples.
+
+## Comparison
+
+| Concern | compose | JSON in SQL | ORM |
+|---------|---------|-------------|-----|
+| Per-level filters | Yes | No (single query) | Yes |
+| DB-agnostic | Any driver | PostgreSQL mostly | Most ORMs |
+| Dependencies | Zero | None | Heavy |
+| Type-safe | Generics | `[]byte` | Usually |
+| Learning curve | 4 functions | Complex SQL | Large API surface |
+| N+1 elimination | Batch WHERE IN | Single query | Eager loading |
+
+## Why "Compose"?
+
+The library does not load anything — it **composes** flat slices into nested structures. The name reflects the actual job: take parts (parents, children) and compose them into a whole.

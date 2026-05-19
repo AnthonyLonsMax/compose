@@ -1,9 +1,9 @@
-package eagerload_test
+package compose_test
 
 import (
 	"testing"
 
-	"github.com/AnthonyLonsMax/eagerload"
+	"github.com/AnthonyLonsMax/compose"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -64,7 +64,7 @@ func TestThreeLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	catIDs := eagerload.ExtractIDs(categories, func(c testCat) int { return c.ID })
+	catIDs := compose.ExtractIDs(categories, func(c testCat) int { return c.ID })
 
 	query, args, err := sqlx.In(
 		"SELECT id, category_id, name FROM products WHERE category_id IN (?) ORDER BY id",
@@ -81,7 +81,7 @@ func TestThreeLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prodIDs := eagerload.ExtractIDs(products, func(p testProd) int { return p.ID })
+	prodIDs := compose.ExtractIDs(products, func(p testProd) int { return p.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, product_id, name, price FROM variants WHERE product_id IN (?) ORDER BY id",
@@ -100,14 +100,14 @@ func TestThreeLevel(t *testing.T) {
 
 	// ---------- Phase 2: Reconstruct bottom-up ----------
 
-	eagerload.MergeChildren(
-		products, eagerload.GroupBy(variants, func(v testVar) int { return v.ProductID }),
+	compose.MergeChildren(
+		products, compose.GroupBy(variants, func(v testVar) int { return v.ProductID }),
 		func(p testProd) int { return p.ID },
 		func(p *testProd, vs []testVar) { p.Variants = vs },
 	)
 
-	eagerload.MergeChildren(
-		categories, eagerload.GroupBy(products, func(p testProd) int { return p.CategoryID }),
+	compose.MergeChildren(
+		categories, compose.GroupBy(products, func(p testProd) int { return p.CategoryID }),
 		func(c testCat) int { return c.ID },
 		func(c *testCat, ps []testProd) { c.Products = ps },
 	)
@@ -245,7 +245,7 @@ func TestFourLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contIDs := eagerload.ExtractIDs(continents, func(c testContinent4) int { return c.ID })
+	contIDs := compose.ExtractIDs(continents, func(c testContinent4) int { return c.ID })
 
 	query, args, err := sqlx.In(
 		"SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id",
@@ -262,7 +262,7 @@ func TestFourLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctryIDs := eagerload.ExtractIDs(countries, func(c testCountry4) int { return c.ID })
+	ctryIDs := compose.ExtractIDs(countries, func(c testCountry4) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, country_id, name FROM cities WHERE country_id IN (?) ORDER BY id",
@@ -279,7 +279,7 @@ func TestFourLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cityIDs := eagerload.ExtractIDs(cities, func(c testCity4) int { return c.ID })
+	cityIDs := compose.ExtractIDs(cities, func(c testCity4) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id",
@@ -298,20 +298,20 @@ func TestFourLevelNesting(t *testing.T) {
 
 	// ---------- Phase 2: Reconstruct bottom-up ----------
 
-	eagerload.MergeChildren(
-		cities, eagerload.GroupBy(districts, func(d testDist) int { return d.CityID }),
+	compose.MergeChildren(
+		cities, compose.GroupBy(districts, func(d testDist) int { return d.CityID }),
 		func(c testCity4) int { return c.ID },
 		func(c *testCity4, ds []testDist) { c.Districts = ds },
 	)
 
-	eagerload.MergeChildren(
-		countries, eagerload.GroupBy(cities, func(c testCity4) int { return c.CountryID }),
+	compose.MergeChildren(
+		countries, compose.GroupBy(cities, func(c testCity4) int { return c.CountryID }),
 		func(c testCountry4) int { return c.ID },
 		func(c *testCountry4, cs []testCity4) { c.Cities = cs },
 	)
 
-	eagerload.MergeChildren(
-		continents, eagerload.GroupBy(countries, func(c testCountry4) int { return c.ContinentID }),
+	compose.MergeChildren(
+		continents, compose.GroupBy(countries, func(c testCountry4) int { return c.ContinentID }),
 		func(c testContinent4) int { return c.ID },
 		func(c *testContinent4, cs []testCountry4) { c.Countries = cs },
 	)
@@ -480,7 +480,7 @@ func TestSixLvl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contIDs := eagerload.ExtractIDs(continents, func(c testContinent6) int { return c.ID })
+	contIDs := compose.ExtractIDs(continents, func(c testContinent6) int { return c.ID })
 
 	query, args, err := sqlx.In(
 		"SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id",
@@ -497,7 +497,7 @@ func TestSixLvl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctryIDs := eagerload.ExtractIDs(countries, func(c testCountry6) int { return c.ID })
+	ctryIDs := compose.ExtractIDs(countries, func(c testCountry6) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, country_id, name FROM regions WHERE country_id IN (?) ORDER BY id",
@@ -514,7 +514,7 @@ func TestSixLvl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	regIDs := eagerload.ExtractIDs(regions, func(r testRegion6) int { return r.ID })
+	regIDs := compose.ExtractIDs(regions, func(r testRegion6) int { return r.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, region_id, name FROM cities WHERE region_id IN (?) ORDER BY id",
@@ -532,7 +532,7 @@ func TestSixLvl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cityIDs := eagerload.ExtractIDs(cities, func(c testCity6) int { return c.ID })
+	cityIDs := compose.ExtractIDs(cities, func(c testCity6) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id",
@@ -549,7 +549,7 @@ func TestSixLvl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	distIDs := eagerload.ExtractIDs(districts, func(d testDistrict6) int { return d.ID })
+	distIDs := compose.ExtractIDs(districts, func(d testDistrict6) int { return d.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, district_id, name FROM buildings WHERE district_id IN (?) ORDER BY id",
@@ -568,32 +568,32 @@ func TestSixLvl(t *testing.T) {
 
 	// ---------- Phase 2: Reconstruct bottom-up ----------
 
-	eagerload.MergeChildren(
-		districts, eagerload.GroupBy(buildings, func(b testBuilding6) int { return b.DistrictID }),
+	compose.MergeChildren(
+		districts, compose.GroupBy(buildings, func(b testBuilding6) int { return b.DistrictID }),
 		func(d testDistrict6) int { return d.ID },
 		func(d *testDistrict6, bs []testBuilding6) { d.Buildings = bs },
 	)
 
-	eagerload.MergeChildren(
-		cities, eagerload.GroupBy(districts, func(d testDistrict6) int { return d.CityID }),
+	compose.MergeChildren(
+		cities, compose.GroupBy(districts, func(d testDistrict6) int { return d.CityID }),
 		func(c testCity6) int { return c.ID },
 		func(c *testCity6, ds []testDistrict6) { c.Districts = ds },
 	)
 
-	eagerload.MergeChildren(
-		regions, eagerload.GroupBy(cities, func(c testCity6) int { return c.RegionID }),
+	compose.MergeChildren(
+		regions, compose.GroupBy(cities, func(c testCity6) int { return c.RegionID }),
 		func(r testRegion6) int { return r.ID },
 		func(r *testRegion6, cs []testCity6) { r.Cities = cs },
 	)
 
-	eagerload.MergeChildren(
-		countries, eagerload.GroupBy(regions, func(r testRegion6) int { return r.CountryID }),
+	compose.MergeChildren(
+		countries, compose.GroupBy(regions, func(r testRegion6) int { return r.CountryID }),
 		func(c testCountry6) int { return c.ID },
 		func(c *testCountry6, rs []testRegion6) { c.Regions = rs },
 	)
 
-	eagerload.MergeChildren(
-		continents, eagerload.GroupBy(countries, func(c testCountry6) int { return c.ContinentID }),
+	compose.MergeChildren(
+		continents, compose.GroupBy(countries, func(c testCountry6) int { return c.ContinentID }),
 		func(c testContinent6) int { return c.ID },
 		func(c *testContinent6, cs []testCountry6) { c.Countries = cs },
 	)

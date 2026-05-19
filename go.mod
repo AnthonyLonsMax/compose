@@ -1,4 +1,4 @@
-module github.com/AnthonyLonsMax/eagerload
+module github.com/AnthonyLonsMax/compose
 
 go 1.26.1
 
