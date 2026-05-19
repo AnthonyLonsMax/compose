@@ -1,8 +1,9 @@
-package dbutil
+package dbutil_test
 
 import (
 	"testing"
 
+	"github.com/AnthonyLonsMax/dbutil"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -29,7 +30,9 @@ type testCat struct {
 	Products []testProd `db:"-"`
 }
 
-func TestThreeLevelNesting(t *testing.T) {
+func TestThreeLevel(t *testing.T) {
+	t.Parallel()
+
 	dbs, err := sqlx.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -55,12 +58,13 @@ func TestThreeLevelNesting(t *testing.T) {
 	// ---------- Phase 1: Query top-down (WHERE IN) ----------
 
 	var categories []testCat
+
 	err = dbs.Select(&categories, "SELECT id, name FROM categories ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	catIDs := ExtractIDs(categories, func(c testCat) int { return c.ID })
+	catIDs := dbutil.ExtractIDs(categories, func(c testCat) int { return c.ID })
 
 	query, args, err := sqlx.In(
 		"SELECT id, category_id, name FROM products WHERE category_id IN (?) ORDER BY id",
@@ -77,7 +81,7 @@ func TestThreeLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prodIDs := ExtractIDs(products, func(p testProd) int { return p.ID })
+	prodIDs := dbutil.ExtractIDs(products, func(p testProd) int { return p.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, product_id, name, price FROM variants WHERE product_id IN (?) ORDER BY id",
@@ -96,14 +100,14 @@ func TestThreeLevelNesting(t *testing.T) {
 
 	// ---------- Phase 2: Reconstruct bottom-up ----------
 
-	MergeChildren(
-		products, GroupBy(variants, func(v testVar) int { return v.ProductID }),
+	dbutil.MergeChildren(
+		products, dbutil.GroupBy(variants, func(v testVar) int { return v.ProductID }),
 		func(p testProd) int { return p.ID },
 		func(p *testProd, vs []testVar) { p.Variants = vs },
 	)
 
-	MergeChildren(
-		categories, GroupBy(products, func(p testProd) int { return p.CategoryID }),
+	dbutil.MergeChildren(
+		categories, dbutil.GroupBy(products, func(p testProd) int { return p.CategoryID }),
 		func(c testCat) int { return c.ID },
 		func(c *testCat, ps []testProd) { c.Products = ps },
 	)
@@ -141,9 +145,11 @@ func TestThreeLevelNesting(t *testing.T) {
 	if phone == nil {
 		t.Fatal("Phone not found")
 	}
+
 	if len(phone.Variants) != 2 {
 		t.Fatalf("expected 2 variants in Phone, got %d", len(phone.Variants))
 	}
+
 	if phone.Variants[0].Name != "iPhone" || phone.Variants[0].Price != 999 {
 		t.Errorf("unexpected first variant: %+v", phone.Variants[0])
 	}
@@ -152,6 +158,7 @@ func TestThreeLevelNesting(t *testing.T) {
 	if laptop == nil {
 		t.Fatal("Laptop not found")
 	}
+
 	if len(laptop.Variants) != 2 {
 		t.Fatalf("expected 2 variants in Laptop, got %d", len(laptop.Variants))
 	}
@@ -160,9 +167,11 @@ func TestThreeLevelNesting(t *testing.T) {
 	if books == nil {
 		t.Fatal("Books not found")
 	}
+
 	if len(books.Products) != 1 {
 		t.Fatalf("expected 1 product in Books, got %d", len(books.Products))
 	}
+
 	if len(books.Products[0].Variants) != 2 {
 		t.Fatalf("expected 2 variants in Go Book, got %d", len(books.Products[0].Variants))
 	}
@@ -197,6 +206,8 @@ type testContinent4 struct {
 }
 
 func TestFourLevelNesting(t *testing.T) {
+	t.Parallel()
+
 	dbs, err := sqlx.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +244,8 @@ func TestFourLevelNesting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contIDs := ExtractIDs(continents, func(c testContinent4) int { return c.ID })
+
+	contIDs := dbutil.ExtractIDs(continents, func(c testContinent4) int { return c.ID })
 
 	query, args, err := sqlx.In(
 		"SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id",
@@ -250,7 +262,7 @@ func TestFourLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctryIDs := ExtractIDs(countries, func(c testCountry4) int { return c.ID })
+	ctryIDs := dbutil.ExtractIDs(countries, func(c testCountry4) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, country_id, name FROM cities WHERE country_id IN (?) ORDER BY id",
@@ -267,7 +279,7 @@ func TestFourLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cityIDs := ExtractIDs(cities, func(c testCity4) int { return c.ID })
+	cityIDs := dbutil.ExtractIDs(cities, func(c testCity4) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id",
@@ -278,6 +290,7 @@ func TestFourLevelNesting(t *testing.T) {
 	}
 
 	var districts []testDist
+
 	err = dbs.Select(&districts, query, args...)
 	if err != nil {
 		t.Fatal(err)
@@ -285,20 +298,20 @@ func TestFourLevelNesting(t *testing.T) {
 
 	// ---------- Phase 2: Reconstruct bottom-up ----------
 
-	MergeChildren(
-		cities, GroupBy(districts, func(d testDist) int { return d.CityID }),
+	dbutil.MergeChildren(
+		cities, dbutil.GroupBy(districts, func(d testDist) int { return d.CityID }),
 		func(c testCity4) int { return c.ID },
 		func(c *testCity4, ds []testDist) { c.Districts = ds },
 	)
 
-	MergeChildren(
-		countries, GroupBy(cities, func(c testCity4) int { return c.CountryID }),
+	dbutil.MergeChildren(
+		countries, dbutil.GroupBy(cities, func(c testCity4) int { return c.CountryID }),
 		func(c testCountry4) int { return c.ID },
 		func(c *testCountry4, cs []testCity4) { c.Cities = cs },
 	)
 
-	MergeChildren(
-		continents, GroupBy(countries, func(c testCountry4) int { return c.ContinentID }),
+	dbutil.MergeChildren(
+		continents, dbutil.GroupBy(countries, func(c testCountry4) int { return c.ContinentID }),
 		func(c testContinent4) int { return c.ID },
 		func(c *testContinent4, cs []testCountry4) { c.Countries = cs },
 	)
@@ -324,20 +337,25 @@ func TestFourLevelNesting(t *testing.T) {
 	}
 
 	europe := lookupCont(1)
+
 	if europe == nil {
 		t.Fatal("Europe not found")
 	}
+
 	if len(europe.Countries) != 2 {
 		t.Fatalf("expected 2 countries in Europe, got %d", len(europe.Countries))
 	}
 
 	france := &europe.Countries[0]
+
 	if france.ID == 2 {
 		france = &europe.Countries[1]
 	}
+
 	if france.Name != "France" || france.ID != 1 {
 		t.Fatalf("expected France (ID=1), got %+v", france)
 	}
+
 	if len(france.Cities) != 2 {
 		t.Fatalf("expected 2 cities in France, got %d", len(france.Cities))
 	}
@@ -346,9 +364,11 @@ func TestFourLevelNesting(t *testing.T) {
 	if paris == nil {
 		t.Fatal("Paris not found in France")
 	}
+
 	if len(paris.Districts) != 2 {
 		t.Fatalf("expected 2 districts in Paris, got %d", len(paris.Districts))
 	}
+
 	if paris.Districts[0].Name != "Montmartre" && paris.Districts[1].Name != "Montmartre" {
 		t.Errorf("expected Montmartre in districts, got %+v", paris.Districts)
 	}
@@ -357,15 +377,19 @@ func TestFourLevelNesting(t *testing.T) {
 	if asia == nil {
 		t.Fatal("Asia not found")
 	}
+
 	if len(asia.Countries) != 1 {
 		t.Fatalf("expected 1 country in Asia, got %d", len(asia.Countries))
 	}
+
 	if asia.Countries[0].Name != "Japan" {
 		t.Errorf("expected Japan, got %s", asia.Countries[0].Name)
 	}
+
 	if len(asia.Countries[0].Cities) != 1 {
 		t.Fatalf("expected 1 city in Japan, got %d", len(asia.Countries[0].Cities))
 	}
+
 	if len(asia.Countries[0].Cities[0].Districts) != 2 {
 		t.Fatalf("expected 2 districts in Tokyo, got %d", len(asia.Countries[0].Cities[0].Districts))
 	}
@@ -413,7 +437,7 @@ type testContinent6 struct {
 	Countries []testCountry6 `db:"-"`
 }
 
-func TestSixLevelNesting(t *testing.T) {
+func TestSixLvl(t *testing.T) {
 	dbs, err := sqlx.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -450,11 +474,13 @@ func TestSixLevelNesting(t *testing.T) {
 	// ---------- Phase 1: Query top-down (WHERE IN) ----------
 
 	var continents []testContinent6
+
 	err = dbs.Select(&continents, "SELECT id, name FROM continents ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
-	contIDs := ExtractIDs(continents, func(c testContinent6) int { return c.ID })
+
+	contIDs := dbutil.ExtractIDs(continents, func(c testContinent6) int { return c.ID })
 
 	query, args, err := sqlx.In(
 		"SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id",
@@ -465,11 +491,13 @@ func TestSixLevelNesting(t *testing.T) {
 	}
 
 	var countries []testCountry6
+
 	err = dbs.Select(&countries, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctryIDs := ExtractIDs(countries, func(c testCountry6) int { return c.ID })
+
+	ctryIDs := dbutil.ExtractIDs(countries, func(c testCountry6) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, country_id, name FROM regions WHERE country_id IN (?) ORDER BY id",
@@ -480,26 +508,31 @@ func TestSixLevelNesting(t *testing.T) {
 	}
 
 	var regions []testRegion6
+
 	err = dbs.Select(&regions, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	regIDs := ExtractIDs(regions, func(r testRegion6) int { return r.ID })
+
+	regIDs := dbutil.ExtractIDs(regions, func(r testRegion6) int { return r.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, region_id, name FROM cities WHERE region_id IN (?) ORDER BY id",
 		regIDs,
 	)
+
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var cities []testCity6
+
 	err = dbs.Select(&cities, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cityIDs := ExtractIDs(cities, func(c testCity6) int { return c.ID })
+
+	cityIDs := dbutil.ExtractIDs(cities, func(c testCity6) int { return c.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id",
@@ -516,7 +549,7 @@ func TestSixLevelNesting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	distIDs := ExtractIDs(districts, func(d testDistrict6) int { return d.ID })
+	distIDs := dbutil.ExtractIDs(districts, func(d testDistrict6) int { return d.ID })
 
 	query, args, err = sqlx.In(
 		"SELECT id, district_id, name FROM buildings WHERE district_id IN (?) ORDER BY id",
@@ -527,6 +560,7 @@ func TestSixLevelNesting(t *testing.T) {
 	}
 
 	var buildings []testBuilding6
+
 	err = dbs.Select(&buildings, query, args...)
 	if err != nil {
 		t.Fatal(err)
@@ -534,32 +568,32 @@ func TestSixLevelNesting(t *testing.T) {
 
 	// ---------- Phase 2: Reconstruct bottom-up ----------
 
-	MergeChildren(
-		districts, GroupBy(buildings, func(b testBuilding6) int { return b.DistrictID }),
+	dbutil.MergeChildren(
+		districts, dbutil.GroupBy(buildings, func(b testBuilding6) int { return b.DistrictID }),
 		func(d testDistrict6) int { return d.ID },
 		func(d *testDistrict6, bs []testBuilding6) { d.Buildings = bs },
 	)
 
-	MergeChildren(
-		cities, GroupBy(districts, func(d testDistrict6) int { return d.CityID }),
+	dbutil.MergeChildren(
+		cities, dbutil.GroupBy(districts, func(d testDistrict6) int { return d.CityID }),
 		func(c testCity6) int { return c.ID },
 		func(c *testCity6, ds []testDistrict6) { c.Districts = ds },
 	)
 
-	MergeChildren(
-		regions, GroupBy(cities, func(c testCity6) int { return c.RegionID }),
+	dbutil.MergeChildren(
+		regions, dbutil.GroupBy(cities, func(c testCity6) int { return c.RegionID }),
 		func(r testRegion6) int { return r.ID },
 		func(r *testRegion6, cs []testCity6) { r.Cities = cs },
 	)
 
-	MergeChildren(
-		countries, GroupBy(regions, func(r testRegion6) int { return r.CountryID }),
+	dbutil.MergeChildren(
+		countries, dbutil.GroupBy(regions, func(r testRegion6) int { return r.CountryID }),
 		func(c testCountry6) int { return c.ID },
 		func(c *testCountry6, rs []testRegion6) { c.Regions = rs },
 	)
 
-	MergeChildren(
-		continents, GroupBy(countries, func(c testCountry6) int { return c.ContinentID }),
+	dbutil.MergeChildren(
+		continents, dbutil.GroupBy(countries, func(c testCountry6) int { return c.ContinentID }),
 		func(c testContinent6) int { return c.ID },
 		func(c *testContinent6, cs []testCountry6) { c.Countries = cs },
 	)
@@ -585,9 +619,11 @@ func TestSixLevelNesting(t *testing.T) {
 	}
 
 	europe := lookupCont(1)
+
 	if europe == nil {
 		t.Fatal("Europe not found")
 	}
+
 	if len(europe.Countries) != 2 {
 		t.Fatalf("expected 2 countries in Europe, got %d", len(europe.Countries))
 	}
@@ -606,51 +642,65 @@ func TestSixLevelNesting(t *testing.T) {
 	}
 
 	paris := france.Regions[0].Cities[0]
+
 	if len(paris.Districts) != 2 {
 		t.Fatalf("expected 2 districts in Paris, got %d", len(paris.Districts))
 	}
 
 	montmartre := lookupDist(paris.Districts, 1)
+
 	if montmartre == nil {
 		t.Fatal("Montmartre not found in Paris")
 	}
+
 	if len(montmartre.Buildings) != 1 {
 		t.Fatalf("expected 1 building in Montmartre, got %d", len(montmartre.Buildings))
 	}
+
 	if montmartre.Buildings[0].Name != "Sacre Coeur" {
 		t.Errorf("expected Sacre Coeur, got %s", montmartre.Buildings[0].Name)
 	}
 
 	asia := lookupCont(2)
+
 	if asia == nil {
 		t.Fatal("Asia not found")
 	}
+
 	if len(asia.Countries) != 1 {
 		t.Fatalf("expected 1 country in Asia, got %d", len(asia.Countries))
 	}
+
 	japan := asia.Countries[0]
+
 	if japan.Name != "Japan" {
 		t.Errorf("expected Japan, got %s", japan.Name)
 	}
+
 	if len(japan.Regions) != 1 {
 		t.Fatalf("expected 1 region in Japan, got %d", len(japan.Regions))
 	}
 
 	tokyo := japan.Regions[0].Cities[0]
+
 	if tokyo.Name != "Tokyo" {
 		t.Errorf("expected Tokyo, got %s", tokyo.Name)
 	}
+
 	if len(tokyo.Districts) != 2 {
 		t.Fatalf("expected 2 districts in Tokyo, got %d", len(tokyo.Districts))
 	}
 
 	shibuyaDist := lookupDist(tokyo.Districts, 4)
+
 	if shibuyaDist == nil {
 		t.Fatal("Shibuya district not found in Tokyo")
 	}
+
 	if len(shibuyaDist.Buildings) != 1 {
 		t.Fatalf("expected 1 building in Shibuya, got %d", len(shibuyaDist.Buildings))
 	}
+
 	if shibuyaDist.Buildings[0].Name != "Shibuya Crossing" {
 		t.Errorf("expected Shibuya Crossing, got %s", shibuyaDist.Buildings[0].Name)
 	}

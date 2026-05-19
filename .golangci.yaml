@@ -12,6 +12,8 @@ linters:
   disable:
     - wsl
     - gomodguard
+    - gocognit
+    - depguard
 formatters:
   enable:
     - gci
