@@ -4,6 +4,10 @@ Generic utilities for composing nested Go structs from flat relational query res
 
 `compose` does not load data, cache queries, or generate SQL. It takes slices you already fetched and merges them into a tree — nothing more.
 
+```
+go get github.com/AnthonyLonsMax/compose@v1.0.1
+```
+
 ## Why This Library Exists
 
 Every project with relational data eventually faces the same problem: you query parents, you need the children, and suddenly you're writing nested for-loops or N+1 queries.
