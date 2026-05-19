@@ -17,32 +17,33 @@ type testVar struct {
 }
 
 type testProd struct {
-	ID         int    `db:"id"`
-	Name       string `db:"name"`
-	CategoryID int    `db:"category_id"`
-	Variants   []testVar
+	ID         int       `db:"id"`
+	Name       string    `db:"name"`
+	CategoryID int       `db:"category_id"`
+	Variants   []testVar `db:"-"`
 }
 
 type testCat struct {
-	ID       int    `db:"id"`
-	Name     string `db:"name"`
-	Products []testProd
+	ID       int        `db:"id"`
+	Name     string     `db:"name"`
+	Products []testProd `db:"-"`
 }
 
 func TestThreeLevelNesting(t *testing.T) {
-	db, err := sqlx.Open("sqlite3", ":memory:")
+	dbs, err := sqlx.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 
-	db.MustExec(`
+	t.Cleanup(func() { _ = dbs.Close() })
+
+	dbs.MustExec(`
 		CREATE TABLE categories (id INTEGER PRIMARY KEY, name TEXT);
 		CREATE TABLE products (id INTEGER PRIMARY KEY, category_id INTEGER REFERENCES categories(id), name TEXT);
 		CREATE TABLE variants (id INTEGER PRIMARY KEY, product_id INTEGER REFERENCES products(id), name TEXT, price REAL);
 	`)
 
-	db.MustExec(`
+	dbs.MustExec(`
 		INSERT INTO categories VALUES (1, 'Electronics'), (2, 'Books');
 		INSERT INTO products VALUES (1, 1, 'Phone'), (2, 1, 'Laptop'), (3, 2, 'Go Book');
 		INSERT INTO variants VALUES
@@ -54,40 +55,57 @@ func TestThreeLevelNesting(t *testing.T) {
 	// ---------- Phase 1: Query top-down (WHERE IN) ----------
 
 	var categories []testCat
-	if err := db.Select(&categories, "SELECT id, name FROM categories ORDER BY id"); err != nil {
-		t.Fatal(err)
-	}
-	catIDs := ExtractIDS(categories, func(c testCat) int { return c.ID })
-
-	q, args, err := sqlx.In("SELECT id, category_id, name FROM products WHERE category_id IN (?) ORDER BY id", catIDs)
+	err = dbs.Select(&categories, "SELECT id, name FROM categories ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	catIDs := ExtractIDs(categories, func(c testCat) int { return c.ID })
+
+	query, args, err := sqlx.In(
+		"SELECT id, category_id, name FROM products WHERE category_id IN (?) ORDER BY id",
+		catIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var products []testProd
-	if err := db.Select(&products, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	prodIDs := ExtractIDS(products, func(p testProd) int { return p.ID })
 
-	q, args, err = sqlx.In("SELECT id, product_id, name, price FROM variants WHERE product_id IN (?) ORDER BY id", prodIDs)
+	err = dbs.Select(&products, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var variants []testVar
-	if err := db.Select(&variants, q, args...); err != nil {
+
+	prodIDs := ExtractIDs(products, func(p testProd) int { return p.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, product_id, name, price FROM variants WHERE product_id IN (?) ORDER BY id",
+		prodIDs,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// ---------- Phase 2: Reconstruct bottom-up (flat slices, no nested for loops) ----------
+	var variants []testVar
+
+	err = dbs.Select(&variants, query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ---------- Phase 2: Reconstruct bottom-up ----------
 
 	byProduct := GroupBy(variants, func(v testVar) int { return v.ProductID })
-	MergeChildren(products, byProduct,
+	MergeChildren(
+		products, byProduct,
 		func(p testProd) int { return p.ID },
 		func(p *testProd, vs []testVar) { p.Variants = vs },
 	)
 
 	byCategory := GroupBy(products, func(p testProd) int { return p.CategoryID })
-	MergeChildren(categories, byCategory,
+	MergeChildren(
+		categories, byCategory,
 		func(c testCat) int { return c.ID },
 		func(c *testCat, ps []testProd) { c.Products = ps },
 	)
@@ -99,6 +117,7 @@ func TestThreeLevelNesting(t *testing.T) {
 				return &categories[i]
 			}
 		}
+
 		return nil
 	}
 	lookupProd := func(prods []testProd, id int) *testProd {
@@ -107,6 +126,7 @@ func TestThreeLevelNesting(t *testing.T) {
 				return &prods[i]
 			}
 		}
+
 		return nil
 	}
 
@@ -114,6 +134,7 @@ func TestThreeLevelNesting(t *testing.T) {
 	if elec == nil {
 		t.Fatal("Electronics not found")
 	}
+
 	if len(elec.Products) != 2 {
 		t.Fatalf("expected 2 products in Electronics, got %d", len(elec.Products))
 	}
@@ -158,40 +179,41 @@ type testDist struct {
 }
 
 type testCity4 struct {
-	ID        int    `db:"id"`
-	Name      string `db:"name"`
-	CountryID int    `db:"country_id"`
-	Districts []testDist
+	ID        int        `db:"id"`
+	Name      string     `db:"name"`
+	CountryID int        `db:"country_id"`
+	Districts []testDist `db:"-"`
 }
 
 type testCountry4 struct {
-	ID          int    `db:"id"`
-	Name        string `db:"name"`
-	ContinentID int    `db:"continent_id"`
-	Cities      []testCity4
+	ID          int         `db:"id"`
+	Name        string      `db:"name"`
+	ContinentID int         `db:"continent_id"`
+	Cities      []testCity4 `db:"-"`
 }
 
 type testContinent4 struct {
-	ID        int    `db:"id"`
-	Name      string `db:"name"`
-	Countries []testCountry4
+	ID        int            `db:"id"`
+	Name      string         `db:"name"`
+	Countries []testCountry4 `db:"-"`
 }
 
 func TestFourLevelNesting(t *testing.T) {
-	db, err := sqlx.Open("sqlite3", ":memory:")
+	dbs, err := sqlx.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 
-	db.MustExec(`
+	t.Cleanup(func() { _ = dbs.Close() })
+
+	dbs.MustExec(`
 		CREATE TABLE continents (id INTEGER PRIMARY KEY, name TEXT);
 		CREATE TABLE countries (id INTEGER PRIMARY KEY, continent_id INTEGER REFERENCES continents(id), name TEXT);
 		CREATE TABLE cities (id INTEGER PRIMARY KEY, country_id INTEGER REFERENCES countries(id), name TEXT);
 		CREATE TABLE districts (id INTEGER PRIMARY KEY, city_id INTEGER REFERENCES cities(id), name TEXT);
 	`)
 
-	db.MustExec(`
+	dbs.MustExec(`
 		INSERT INTO continents VALUES (1, 'Europe'), (2, 'Asia');
 		INSERT INTO countries VALUES (1, 1, 'France'), (2, 1, 'Spain'), (3, 2, 'Japan');
 		INSERT INTO cities VALUES
@@ -208,56 +230,80 @@ func TestFourLevelNesting(t *testing.T) {
 	// ---------- Phase 1: Query top-down (WHERE IN) ----------
 
 	var continents []testContinent4
-	if err := db.Select(&continents, "SELECT id, name FROM continents ORDER BY id"); err != nil {
-		t.Fatal(err)
-	}
-	contIDs := ExtractIDS(continents, func(c testContinent4) int { return c.ID })
 
-	q, args, err := sqlx.In("SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id", contIDs)
+	err = dbs.Select(&continents, "SELECT id, name FROM continents ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
+	contIDs := ExtractIDs(continents, func(c testContinent4) int { return c.ID })
+
+	query, args, err := sqlx.In(
+		"SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id",
+		contIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var countries []testCountry4
-	if err := db.Select(&countries, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	ctryIDs := ExtractIDS(countries, func(c testCountry4) int { return c.ID })
 
-	q, args, err = sqlx.In("SELECT id, country_id, name FROM cities WHERE country_id IN (?) ORDER BY id", ctryIDs)
+	err = dbs.Select(&countries, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	ctryIDs := ExtractIDs(countries, func(c testCountry4) int { return c.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, country_id, name FROM cities WHERE country_id IN (?) ORDER BY id",
+		ctryIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var cities []testCity4
-	if err := db.Select(&cities, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	cityIDs := ExtractIDS(cities, func(c testCity4) int { return c.ID })
 
-	q, args, err = sqlx.In("SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id", cityIDs)
+	err = dbs.Select(&cities, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var districts []testDist
-	if err := db.Select(&districts, q, args...); err != nil {
+
+	cityIDs := ExtractIDs(cities, func(c testCity4) int { return c.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id",
+		cityIDs,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// ---------- Phase 2: Reconstruct bottom-up (flat slices, no nested for loops) ----------
+	var districts []testDist
+	err = dbs.Select(&districts, query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ---------- Phase 2: Reconstruct bottom-up ----------
 
 	byCity := GroupBy(districts, func(d testDist) int { return d.CityID })
-	MergeChildren(cities, byCity,
+	MergeChildren(
+		cities, byCity,
 		func(c testCity4) int { return c.ID },
 		func(c *testCity4, ds []testDist) { c.Districts = ds },
 	)
 
 	byCountry := GroupBy(cities, func(c testCity4) int { return c.CountryID })
-	MergeChildren(countries, byCountry,
+	MergeChildren(
+		countries, byCountry,
 		func(c testCountry4) int { return c.ID },
 		func(c *testCountry4, cs []testCity4) { c.Cities = cs },
 	)
 
 	byContinent := GroupBy(countries, func(c testCountry4) int { return c.ContinentID })
-	MergeChildren(continents, byContinent,
+	MergeChildren(
+		continents, byContinent,
 		func(c testContinent4) int { return c.ID },
 		func(c *testContinent4, cs []testCountry4) { c.Countries = cs },
 	)
@@ -269,6 +315,7 @@ func TestFourLevelNesting(t *testing.T) {
 				return &continents[i]
 			}
 		}
+
 		return nil
 	}
 	lookupCity := func(cc []testCity4, id int) *testCity4 {
@@ -277,6 +324,7 @@ func TestFourLevelNesting(t *testing.T) {
 				return &cc[i]
 			}
 		}
+
 		return nil
 	}
 
@@ -337,47 +385,48 @@ type testBuilding6 struct {
 }
 
 type testDistrict6 struct {
-	ID        int    `db:"id"`
-	CityID    int    `db:"city_id"`
-	Name      string `db:"name"`
-	Buildings []testBuilding6
+	ID        int             `db:"id"`
+	CityID    int             `db:"city_id"`
+	Name      string          `db:"name"`
+	Buildings []testBuilding6 `db:"-"`
 }
 
 type testCity6 struct {
-	ID        int    `db:"id"`
-	RegionID  int    `db:"region_id"`
-	Name      string `db:"name"`
-	Districts []testDistrict6
+	ID        int             `db:"id"`
+	RegionID  int             `db:"region_id"`
+	Name      string          `db:"name"`
+	Districts []testDistrict6 `db:"-"`
 }
 
 type testRegion6 struct {
-	ID        int    `db:"id"`
-	CountryID int    `db:"country_id"`
-	Name      string `db:"name"`
-	Cities    []testCity6
+	ID        int         `db:"id"`
+	CountryID int         `db:"country_id"`
+	Name      string      `db:"name"`
+	Cities    []testCity6 `db:"-"`
 }
 
 type testCountry6 struct {
-	ID          int    `db:"id"`
-	ContinentID int    `db:"continent_id"`
-	Name        string `db:"name"`
-	Regions     []testRegion6
+	ID          int           `db:"id"`
+	ContinentID int           `db:"continent_id"`
+	Name        string        `db:"name"`
+	Regions     []testRegion6 `db:"-"`
 }
 
 type testContinent6 struct {
-	ID        int    `db:"id"`
-	Name      string `db:"name"`
-	Countries []testCountry6
+	ID        int            `db:"id"`
+	Name      string         `db:"name"`
+	Countries []testCountry6 `db:"-"`
 }
 
 func TestSixLevelNesting(t *testing.T) {
-	db, err := sqlx.Open("sqlite3", ":memory:")
+	dbs, err := sqlx.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 
-	db.MustExec(`
+	t.Cleanup(func() { _ = dbs.Close() })
+
+	dbs.MustExec(`
 		CREATE TABLE continents (id INTEGER PRIMARY KEY, name TEXT);
 		CREATE TABLE countries (id INTEGER PRIMARY KEY, continent_id INTEGER REFERENCES continents(id), name TEXT);
 		CREATE TABLE regions (id INTEGER PRIMARY KEY, country_id INTEGER REFERENCES countries(id), name TEXT);
@@ -386,7 +435,7 @@ func TestSixLevelNesting(t *testing.T) {
 		CREATE TABLE buildings (id INTEGER PRIMARY KEY, district_id INTEGER REFERENCES districts(id), name TEXT);
 	`)
 
-	db.MustExec(`
+	dbs.MustExec(`
 		INSERT INTO continents VALUES (1, 'Europe'), (2, 'Asia');
 		INSERT INTO countries VALUES (1, 1, 'France'), (2, 1, 'Germany'), (3, 2, 'Japan');
 		INSERT INTO regions VALUES (1, 1, 'Ile-de-France'), (2, 2, 'Bavaria'), (3, 3, 'Kanto');
@@ -406,88 +455,121 @@ func TestSixLevelNesting(t *testing.T) {
 	// ---------- Phase 1: Query top-down (WHERE IN) ----------
 
 	var continents []testContinent6
-	if err := db.Select(&continents, "SELECT id, name FROM continents ORDER BY id"); err != nil {
-		t.Fatal(err)
-	}
-	contIDs := ExtractIDS(continents, func(c testContinent6) int { return c.ID })
-
-	q, args, err := sqlx.In("SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id", contIDs)
+	err = dbs.Select(&continents, "SELECT id, name FROM continents ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
 	}
+	contIDs := ExtractIDs(continents, func(c testContinent6) int { return c.ID })
+
+	query, args, err := sqlx.In(
+		"SELECT id, continent_id, name FROM countries WHERE continent_id IN (?) ORDER BY id",
+		contIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var countries []testCountry6
-	if err := db.Select(&countries, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	ctryIDs := ExtractIDS(countries, func(c testCountry6) int { return c.ID })
-
-	q, args, err = sqlx.In("SELECT id, country_id, name FROM regions WHERE country_id IN (?) ORDER BY id", ctryIDs)
+	err = dbs.Select(&countries, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctryIDs := ExtractIDs(countries, func(c testCountry6) int { return c.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, country_id, name FROM regions WHERE country_id IN (?) ORDER BY id",
+		ctryIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var regions []testRegion6
-	if err := db.Select(&regions, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	regIDs := ExtractIDS(regions, func(r testRegion6) int { return r.ID })
-
-	q, args, err = sqlx.In("SELECT id, region_id, name FROM cities WHERE region_id IN (?) ORDER BY id", regIDs)
+	err = dbs.Select(&regions, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
+	regIDs := ExtractIDs(regions, func(r testRegion6) int { return r.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, region_id, name FROM cities WHERE region_id IN (?) ORDER BY id",
+		regIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var cities []testCity6
-	if err := db.Select(&cities, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	cityIDs := ExtractIDS(cities, func(c testCity6) int { return c.ID })
-
-	q, args, err = sqlx.In("SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id", cityIDs)
+	err = dbs.Select(&cities, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cityIDs := ExtractIDs(cities, func(c testCity6) int { return c.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, city_id, name FROM districts WHERE city_id IN (?) ORDER BY id",
+		cityIDs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var districts []testDistrict6
-	if err := db.Select(&districts, q, args...); err != nil {
-		t.Fatal(err)
-	}
-	distIDs := ExtractIDS(districts, func(d testDistrict6) int { return d.ID })
 
-	q, args, err = sqlx.In("SELECT id, district_id, name FROM buildings WHERE district_id IN (?) ORDER BY id", distIDs)
+	err = dbs.Select(&districts, query, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var buildings []testBuilding6
-	if err := db.Select(&buildings, q, args...); err != nil {
+
+	distIDs := ExtractIDs(districts, func(d testDistrict6) int { return d.ID })
+
+	query, args, err = sqlx.In(
+		"SELECT id, district_id, name FROM buildings WHERE district_id IN (?) ORDER BY id",
+		distIDs,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// ---------- Phase 2: Reconstruct bottom-up (flat slices, no nested for loops) ----------
+	var buildings []testBuilding6
+	err = dbs.Select(&buildings, query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ---------- Phase 2: Reconstruct bottom-up ----------
 
 	byDistrict := GroupBy(buildings, func(b testBuilding6) int { return b.DistrictID })
-	MergeChildren(districts, byDistrict,
+	MergeChildren(
+		districts, byDistrict,
 		func(d testDistrict6) int { return d.ID },
 		func(d *testDistrict6, bs []testBuilding6) { d.Buildings = bs },
 	)
 
 	byCity := GroupBy(districts, func(d testDistrict6) int { return d.CityID })
-	MergeChildren(cities, byCity,
+	MergeChildren(
+		cities, byCity,
 		func(c testCity6) int { return c.ID },
 		func(c *testCity6, ds []testDistrict6) { c.Districts = ds },
 	)
 
 	byRegion := GroupBy(cities, func(c testCity6) int { return c.RegionID })
-	MergeChildren(regions, byRegion,
+	MergeChildren(
+		regions, byRegion,
 		func(r testRegion6) int { return r.ID },
 		func(r *testRegion6, cs []testCity6) { r.Cities = cs },
 	)
 
 	byCountry := GroupBy(regions, func(r testRegion6) int { return r.CountryID })
-	MergeChildren(countries, byCountry,
+	MergeChildren(
+		countries, byCountry,
 		func(c testCountry6) int { return c.ID },
 		func(c *testCountry6, rs []testRegion6) { c.Regions = rs },
 	)
 
 	byContinent := GroupBy(countries, func(c testCountry6) int { return c.ContinentID })
-	MergeChildren(continents, byContinent,
+	MergeChildren(
+		continents, byContinent,
 		func(c testContinent6) int { return c.ID },
 		func(c *testContinent6, cs []testCountry6) { c.Countries = cs },
 	)
@@ -499,6 +581,7 @@ func TestSixLevelNesting(t *testing.T) {
 				return &continents[i]
 			}
 		}
+
 		return nil
 	}
 	lookupDist := func(dd []testDistrict6, id int) *testDistrict6 {
@@ -507,6 +590,7 @@ func TestSixLevelNesting(t *testing.T) {
 				return &dd[i]
 			}
 		}
+
 		return nil
 	}
 
@@ -522,9 +606,11 @@ func TestSixLevelNesting(t *testing.T) {
 	if france.ID != 1 {
 		france = &europe.Countries[1]
 	}
+
 	if france.Name != "France" {
 		t.Fatalf("expected France, got %s", france.Name)
 	}
+
 	if len(france.Regions) != 1 {
 		t.Fatalf("expected 1 region in France, got %d", len(france.Regions))
 	}

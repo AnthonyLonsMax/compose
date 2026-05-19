@@ -42,7 +42,7 @@ Query each level independently with `WHERE IN`, then use these utilities to reco
 
 ```
 SELECT * FROM categories              → []Parent
-ExtractIDS(parents)                   → []id
+ExtractIDs(parents)                   → []id
 SELECT * FROM children WHERE parent_id IN (…) → []Child
 GroupBy(children, parent_id)          → map[id][]Child
 MergeChildren(parents, grouped)       → parents now have their children
@@ -57,7 +57,7 @@ Each level can have its own filters, pagination, or business logic.
 func GroupBy[T any, K comparable](objects []T, keyFunc func(T) K) map[K][]T
 
 // Extracts a key from each element, preserving order.
-func ExtractIDS[T any, KEY any](objects []T, getKeyFunc func(T) KEY) []KEY
+func ExtractIDs[T any, KEY any](objects []T, getKeyFunc func(T) KEY) []KEY
 
 // Merges grouped children into their parents in-place.
 func MergeChildren[TParent, TChild any, K comparable](
@@ -80,7 +80,7 @@ var cats []Category
 db.Select(&cats, "SELECT id, name FROM categories")
 
 // 2. Children (batch)
-ids := ExtractIDS(cats, func(c Category) int { return c.ID })
+ids := ExtractIDs(cats, func(c Category) int { return c.ID })
 q, args, _ := sqlx.In("SELECT id, category_id, name FROM products WHERE category_id IN (?)", ids)
 var prods []Product
 db.Select(&prods, q, args...)
@@ -93,7 +93,7 @@ MergeChildren(cats, byCat,
 )
 
 // 4. Query grandchildren (top-down)
-prodIDs := ExtractIDS(prods, func(p Product) int { return p.ID })
+prodIDs := ExtractIDs(prods, func(p Product) int { return p.ID })
 q, args, _ = sqlx.In("SELECT id, product_id, name, price FROM variants WHERE product_id IN (?)", prodIDs)
 var vars []Variant
 db.Select(&vars, q, args...)
@@ -121,7 +121,7 @@ sqlc generates type-safe query functions. After calling them, use the same utili
 cats, _ := queries.ListCategories(ctx, db)
 
 // 2. Children batch (sqlc-generated)
-ids := dbutil.ExtractIDS(cats, func(c Category) int32 { return c.ID })
+ids := dbutil.ExtractIDs(cats, func(c Category) int32 { return c.ID })
 prods, _ := queries.ListProductsByCategoryIDs(ctx, db, ids)
 
 // 3. Group & merge
@@ -132,7 +132,7 @@ dbutil.MergeChildren(cats, byCat,
 )
 
 // 4. Query grandchildren (top-down)
-prodIDs := dbutil.ExtractIDS(prods, func(p Product) int32 { return p.ID })
+prodIDs := dbutil.ExtractIDs(prods, func(p Product) int32 { return p.ID })
 vars, _ := queries.ListVariantsByProductIDs(ctx, db, prodIDs)
 
 // 5. Reconstruct bottom-up (flat slices, no nested loops)
@@ -160,9 +160,9 @@ For 3+ levels, use bottom-up reconstruction to avoid nested loops.
 ```go
 // Query phase (top-down)
 continents := queryContinents(db)
-countries := queryCountriesByIDs(db, ExtractIDS(continents, ...))
-cities    := queryCitiesByIDs(db, ExtractIDS(countries, ...))
-districts := queryDistrictsByIDs(db, ExtractIDS(cities, ...))
+countries := queryCountriesByIDs(db, ExtractIDs(continents, ...))
+cities    := queryCitiesByIDs(db, ExtractIDs(countries, ...))
+districts := queryDistrictsByIDs(db, ExtractIDs(cities, ...))
 
 // Reconstruct phase (bottom-up, flat slices only)
 MergeChildren(cities,    GroupBy(districts, districtCityID), ...)  // flat

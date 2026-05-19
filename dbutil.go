@@ -1,21 +1,48 @@
+// Package dbutil provides generic utilities for building nested data structures
+// from relational database queries without the N+1 problem.
+//
+// The pattern is: query each hierarchy level independently with WHERE IN,
+// then use GroupBy + MergeChildren to reconstruct the graph in memory.
+// ExtractIDS extracts the foreign keys needed between levels.
+//
+// For multi-level nesting, query top-down and reconstruct bottom-up:
+//
+//	parents  := queryLevel1(db)
+//	ids      := ExtractIDS(parents, ...)
+//	children := queryLevel2(db, ids)
+//	...
+//	MergeChildren(children, GroupBy(grandchildren, ...), ...)  // bottom level first
+//	MergeChildren(parents,   GroupBy(children, ...), ...)      // work up
 package dbutil
 
+// GroupBy groups a slice into a map keyed by K using keyFunc.
 func GroupBy[T any, K comparable](objects []T, keyFunc func(T) K) map[K][]T {
 	result := make(map[K][]T)
 	for _, object := range objects {
 		result[keyFunc(object)] = append(result[keyFunc(object)], object)
 	}
+
 	return result
 }
 
-func ExtractIDS[T any, KEY any](objects []T, getKeyFunc func(T) KEY) []KEY {
+// ExtractIDs extracts a key (typically a database ID) from each element in
+// the slice, preserving order. Used to collect foreign keys for WHERE IN queries.
+func ExtractIDs[T any, KEY any](objects []T, getKeyFunc func(T) KEY) []KEY {
 	keys := make([]KEY, 0, len(objects))
 	for _, object := range objects {
 		keys = append(keys, getKeyFunc(object))
 	}
+
 	return keys
 }
 
+// MergeChildren merges grouped children into their parents in-place.
+//
+// For each parent, parentKeyFunc extracts the lookup key, childMap is searched
+// for matching children, and setChildrenFunc writes them into the parent.
+//
+// TChild is typically a flat row from a query — the setChildrenFunc can
+// transform it into the desired child type before storing.
 func MergeChildren[TParent, TChild any, K comparable](
 	parents []TParent,
 	childMap map[K][]TChild,
